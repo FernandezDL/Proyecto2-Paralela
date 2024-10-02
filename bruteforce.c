@@ -1,138 +1,87 @@
+//bruteforce.c
+//nota: el key usado es bastante pequenio, cuando sea random speedup variara
+
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <openssl/des.h>
-#include <time.h>
+#include <mpi.h>
+#include <unistd.h>
+#include <rpc/des_crypt.h>
 
-// Función para cifrar un texto con una clave DES utilizando la API DES directa
-int encrypt(unsigned char *key, unsigned char *plaintext, int len, unsigned char *ciphertext) {
-    DES_cblock keyBlock;
-    DES_key_schedule schedule;
-
-    // Se ciopia clave
-    memcpy(keyBlock, key, 8);
-
-    // Ajustar la paridad de la clave a impar
-    DES_set_odd_parity(&keyBlock);
-
-    // Configurar la clave DES
-    if (DES_set_key_checked(&keyBlock, &schedule) != 0) {
-        printf("Error configurando la clave\n");
-        return 0;
-    }
-
-    // Cifrar el texto en bloques de 8 bytes
-    for (int i = 0; i < len; i += 8) {
-        DES_ecb_encrypt((DES_cblock *)(plaintext + i), (DES_cblock *)(ciphertext + i), &schedule, DES_ENCRYPT);
-    }
-
-    return len; // El texto cifrado es del mismo tamaño que el original con padding
+void decrypt(long key, char *ciph, int len){
+  //set parity of key and do decrypt
+  long k = 0;
+  for(int i=0; i<8; ++i){
+    key <<= 1;
+    k += (key & (0xFE << i*8));
+  }
+  des_setparity((char *)&k);  //el poder del casteo y &
+  ecb_crypt((char *)&k, (char *) ciph, 16, DES_DECRYPT);
 }
 
-// Función para agregar padding (PKCS7)
-void add_padding(unsigned char *plaintext, int *len) {
-    int padding_len = 8 - (*len % 8);
-    for (int i = *len; i < (*len + padding_len); i++) {
-        plaintext[i] = padding_len;
-    }
-    *len += padding_len;
+void encrypt(long key, char *ciph, int len){
+  //set parity of key and do decrypt
+  long k = 0;
+  for(int i=0; i<8; ++i){
+    key <<= 1;
+    k += (key & (0xFE << i*8));
+  }
+  des_setparity((char *)&k);  //el poder del casteo y &
+  ecb_crypt((char *)&k, (char *) ciph, 16, DES_ENCRYPT);
 }
 
-// Función para desencriptar un texto cifrado con una clave DES utilizando la API DES directa
-int decrypt(unsigned char *key, unsigned char *ciphertext, int len, unsigned char *plaintext) {
-    DES_cblock keyBlock;
-    DES_key_schedule schedule;
-
-    // Se ciopia clave
-    memcpy(keyBlock, key, 8);
-
-    // Ajustar la paridad de la clave a impar
-    DES_set_odd_parity(&keyBlock);
-
-    // Configurar la clave DES
-    if (DES_set_key_checked(&keyBlock, &schedule) != 0) {
-        printf("Error configurando la clave\n");
-        return 0;
-    }
-
-    // Desencriptar el texto en bloques de 8 bytes
-    for (int i = 0; i < len; i += 8) {
-        DES_ecb_encrypt((DES_cblock *)(ciphertext + i), (DES_cblock *)(plaintext + i), &schedule, DES_DECRYPT);
-    }
-
-    return len; // El texto desencriptado es del mismo tamaño que el cifrado
+char search[] = " the ";
+int tryKey(long key, char *ciph, int len){
+  char temp[len+1];
+  memcpy(temp, ciph, len);
+  temp[len]=0;
+  decrypt(key, temp, len);
+  return strstr((char *)temp, search) != NULL;
 }
 
-// Generar todas las combinaciones posibles de claves (fuerza bruta)
-void bruteForceSearch(unsigned char *ciphertext, int len, char *keyword) {
-    unsigned char key[9] = "00000000"; // Llave inicial de 8 caracteres
-    unsigned char plaintext[64]; // Aquí se almacenará el texto descifrado
+unsigned char cipher[] = {108, 245, 65, 63, 125, 200, 150, 66, 17, 170, 207, 170, 34, 31, 70, 215, 0};
+int main(int argc, char *argv[]){ //char **argv
+  int N, id;
+  long upper = (1L <<56); //upper bound DES keys 2^56
+  long mylower, myupper;
+  MPI_Status st;
+  MPI_Request req;
+  int flag;
+  int ciphlen = strlen(cipher);
+  MPI_Comm comm = MPI_COMM_WORLD;
 
-    while (1) {
-        if (decrypt(key, ciphertext, len, plaintext) > 0 && strstr((char *)plaintext, keyword) != NULL) {
-            printf("Llave encontrada: %s\n", key);
-            printf("Texto descifrado: %s\n", plaintext);
-            break;
-        }
+  MPI_Init(NULL, NULL);
+  MPI_Comm_size(comm, &N);
+  MPI_Comm_rank(comm, &id);
 
-        // Incrementar la llave
-        for (int i = 7; i >= 0; i--) {
-            if (key[i] < 'z') {
-                key[i]++;
-                break;
-            } else {
-                key[i] = '0'; // Reinicia el carácter y avanza al siguiente
-            }
-        }
+  int range_per_node = upper / N;
+  mylower = range_per_node * id;
+  myupper = range_per_node * (id+1) -1;
+  if(id == N-1){
+    //compensar residuo
+    myupper = upper;
+  }
 
-        // Si la llave es "zzzzzzzz" entonces ya probamos todas
-        if (strcmp((char *)key, "zzzzzzzz") == 0) {
-            printf("No se encontró la llave correcta.\n");
-            break;
-        }
+  long found = 0;
+
+  MPI_Irecv(&found, 1, MPI_LONG, MPI_ANY_SOURCE, MPI_ANY_TAG, comm, &req);
+
+  for(int i = mylower; i<myupper && (found==0); ++i){
+    if(tryKey(i, (char *)cipher, ciphlen)){
+      found = i;
+      for(int node=0; node<N; node++){
+        MPI_Send(&found, 1, MPI_LONG, node, 0, MPI_COMM_WORLD);
+      }
+      break;
     }
-}
+  }
 
-int main() {
-    // Definir texto original a cifrar
-    unsigned char plaintext[] = "Esta es una prueba de proyecto 2"; // Texto de ejemplo
-    unsigned char ciphertext[64];  // Aquí se almacenará el texto cifrado
-    unsigned char key[] = "segurida"; // Clave de 8 bytes
+  if(id==0){
+    MPI_Wait(&req, &st);
+    decrypt(found, (char *)cipher, ciphlen);
+    printf("%li %s\n", found, cipher);
+  }
 
-    int len = strlen((char *)plaintext);
-
-    // Agregar padding para ajustar al tamaño múltiplo de 8
-    add_padding(plaintext, &len);
-
-    printf("Texto original (con padding): %s\n", plaintext);
-
-    // Cifrar el texto
-    int cipher_len = encrypt(key, plaintext, len, ciphertext);
-    if (cipher_len == 0) {
-        printf("Error en el cifrado\n");
-        return 1;
-    }
-
-    printf("Texto cifrado: ");
-    for (int i = 0; i < cipher_len; i++) {
-        printf("%02x ", ciphertext[i]);
-    }
-    printf("\n");
-
-    // Definir la palabra clave para la búsqueda en el texto descifrado
-    char keyword[] = "es una prueba de"; // Palabra clave a buscar
-
-    // Medir el tiempo de ejecución
-    clock_t start = clock();
-
-    // Realizar búsqueda por fuerza bruta
-    bruteForceSearch(ciphertext, cipher_len, keyword);
-
-    // Calcular y mostrar el tiempo de ejecución
-    clock_t end = clock();
-    double time_taken = ((double)(end - start)) / CLOCKS_PER_SEC;
-    printf("Tiempo de búsqueda: %.6f segundos\n", time_taken);
-
-    return 0;
+  MPI_Finalize();
 }
 
