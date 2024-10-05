@@ -29,22 +29,23 @@ void add_padding(unsigned char *input, size_t input_len, unsigned char *output, 
     *output_len = input_len + padding_length;  // Longitud con padding
 }
 
-// Función para convertir una palabra a su representación hexadecimal
-void string_to_hex(const char *input, char *output) {
-    while (*input) {
-        sprintf(output, "%02X", (unsigned char)*input++);
-        output += 2;
-    }
-    *output = '\0';
+// Función para enmascarar los 56 bits efectivos de la clave
+void mask_56_bits(unsigned long long *key) {
+    *key &= 0x00FFFFFFFFFFFFFF;  // Aplicar una máscara para usar solo los primeros 56 bits
 }
 
 // Función para cifrar un texto con una clave DES en modo CBC, todo en memoria
-void encrypt_with_key(const unsigned char *key, const unsigned char *iv, unsigned char *output, const unsigned char *input, size_t input_len) {
+void encrypt_with_key(unsigned long long key, const unsigned char *iv, unsigned char *output, const unsigned char *input, size_t input_len) {
     DES_cblock key_block;
     DES_key_schedule schedule;
 
-    // Convertir la clave a formato DES_cblock
-    memcpy(key_block, key, 8);
+    // Enmascarar los 56 bits efectivos
+    mask_56_bits(&key);
+
+    // Convertir el número de clave en 8 bytes
+    memcpy(key_block, &key, 8);
+
+    // Usar DES_set_key_unchecked para evitar modificar la clave
     DES_set_key_unchecked(&key_block, &schedule);
 
     // Cifrar en modo CBC
@@ -52,13 +53,17 @@ void encrypt_with_key(const unsigned char *key, const unsigned char *iv, unsigne
 }
 
 // Función para descifrar el texto cifrado con una clave DES en modo CBC, todo en memoria
-int decrypt_with_key(const unsigned char *key, const unsigned char *iv, unsigned char *encrypted_text, unsigned char *decrypted_output, size_t *text_len, const char *keyword_hex) {
+int decrypt_with_key(unsigned long long key, const unsigned char *iv, unsigned char *encrypted_text, unsigned char *decrypted_output, size_t *text_len, const char *keyword) {
     DES_cblock key_block;
     DES_key_schedule schedule;
 
-    // Convertir la clave a formato DES_cblock
-    memcpy(key_block, key, 8);
+    // Enmascarar los 56 bits efectivos
+    mask_56_bits(&key);
 
+    // Convertir el número de clave en 8 bytes
+    memcpy(key_block, &key, 8);
+
+    // Usar DES_set_key_unchecked para evitar modificar la clave
     DES_set_key_unchecked(&key_block, &schedule);
 
     // Desencriptar en modo CBC
@@ -69,50 +74,54 @@ int decrypt_with_key(const unsigned char *key, const unsigned char *iv, unsigned
         return 0;  // Error al eliminar padding
     }
 
-    // Convertir el texto descifrado a hexadecimal
-    char decrypted_hex[256];
-    string_to_hex((char *)decrypted_output, decrypted_hex);
-
-    // Verificar si la frase clave aparece en la representación hexadecimal del texto descifrado
-    if (strstr(decrypted_hex, keyword_hex) != NULL) {
-        return 1;  // Frase clave encontrada en formato hexadecimal
+    // Comprobar si el texto descifrado contiene la palabra clave
+    if (strstr((char *)decrypted_output, keyword) != NULL) {
+        return 1;  // Clave encontrada
     }
 
     return 0;  // Clave incorrecta
 }
 
+// Función para imprimir la clave en formato hexadecimal
+void print_key_hex(unsigned long long key) {
+    printf("Clave actual en hexadecimal: %016llX\n", key);  // Imprimir la clave en hexadecimal (16 caracteres, relleno con ceros si es necesario)
+}
+
 int main() {
-    unsigned char key[9] = "00005678";  // Clave de 8 bytes para cifrado
+    unsigned long long key;  // Clave de 8 bytes representada como número
     unsigned char iv[DES_KEY_SZ] = {0};  // Vector de inicialización estático (todos ceros)
     unsigned char encrypted_text[128];  // Almacenar el texto cifrado
     unsigned char decrypted_text[128];  // Almacenar el texto descifrado
     unsigned char padded_plaintext[128];  // Texto con padding
     size_t padded_len = 0;  // Longitud del texto con padding
     size_t decrypted_len;  // Almacenar la longitud del texto descifrado
-    char keyword_hex[64];  // Palabra clave en formato hexadecimal
     clock_t start_time, end_time;
     double time_taken;
     unsigned long long int i;
 
-    // Convertir la palabra clave a su representación en hexadecimal
-    string_to_hex(keyword, keyword_hex);
-
     // Añadir padding al texto original
     add_padding((unsigned char *)plaintext, strlen(plaintext), padded_plaintext, &padded_len);
 
-    // Cifrar el texto original en memoria
-    encrypt_with_key(key, iv, encrypted_text, padded_plaintext, padded_len);
+    // Cifrar el texto original en memoria usando la clave proporcionada
+    key = 0xFF;  // Clave ingresada
+    encrypt_with_key(key, iv, encrypted_text, padded_plaintext, padded_len);  // Cifrar con la clave numérica
+
+    // Imprimir la clave ingresada
+    printf("Clave ingresada: %016llX\n", key);
 
     // Iniciar temporizador para descifrado por fuerza bruta
     start_time = clock();
 
-    // Fuerza bruta: probar todas las combinaciones de claves de 56 bits (8 caracteres en hexadecimal)
-    for (i = 0x000000000000; i <= 0xFFFFFFFFFFFF; i++) {  // Probar todo el rango de 56 bits
+    // Fuerza bruta: probar todas las combinaciones de claves de 56 bits (8 bytes)
+    for (i = 0x0000000000000000; i <= 0xFFFFFFFFFFFFFFFF; i++) {  // Probar todo el rango de 56 bits
         decrypted_len = padded_len;  // Restablecer la longitud descifrada en cada intento
 
-        // Intentar descifrar con la clave actual
-        if (decrypt_with_key(key, iv, encrypted_text, decrypted_text, &decrypted_len, keyword_hex)) {
-            printf("¡Clave encontrada!: %s\n", key);
+        // Imprimir la clave actual en hexadecimal
+        print_key_hex(i);
+
+        // Intentar descifrar con la clave numérica actual
+        if (decrypt_with_key(i, iv, encrypted_text, decrypted_text, &decrypted_len, keyword)) {
+            printf("¡Clave encontrada!: %016llX\n", i);
             printf("Texto descifrado: %s\n", decrypted_text);
             break;
         }
