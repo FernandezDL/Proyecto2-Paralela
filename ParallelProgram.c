@@ -5,36 +5,30 @@
 #include <time.h>
 #include <string.h>
 
-
-// Texto original que queremos cifrar
-const char *plaintext = "Este es un ejemplo";
-// Frase clave conocida (palabra clave en el texto)
-char *keyword = "ejemplo";
-
 // Función para eliminar padding después del descifrado (PKCS5 padding)
 int remove_padding(unsigned char *text, size_t *text_len) {
-    unsigned char padding_value = text[*text_len - 1];  // Valor del padding
+    unsigned char padding_value = text[*text_len - 1];
     if (padding_value > 8) {
-        return 0;  // Valor de padding inválido
+        return 0;
     }
     *text_len -= padding_value;
-    text[*text_len] = '\0';  // Agregar terminador nulo después de quitar padding
+    text[*text_len] = '\0';
     return 1;
 }
 
 // Función para agregar padding (PKCS5 padding)
 void add_padding(unsigned char *input, size_t input_len, unsigned char *output, size_t *output_len) {
     size_t padding_length = 8 - (input_len % 8);
-    memcpy(output, input, input_len);  // Copiar texto original
+    memcpy(output, input, input_len);
     for (size_t i = 0; i < padding_length; i++) {
-        output[input_len + i] = padding_length;  // Añadir padding
+        output[input_len + i] = padding_length;
     }
-    *output_len = input_len + padding_length;  // Longitud con padding
+    *output_len = input_len + padding_length;
 }
 
 // Función para enmascarar los 56 bits efectivos de la clave
 void mask_56_bits(unsigned long long *key) {
-    *key &= 0x00FFFFFFFFFFFFFF;  // Aplicar una máscara para usar solo los primeros 56 bits
+    *key &= 0x00FFFFFFFFFFFFFF;
 }
 
 // Función para cifrar un texto con una clave DES en modo CBC, todo en memoria
@@ -42,16 +36,9 @@ void encrypt_with_key(unsigned long long key, const unsigned char *iv, unsigned 
     DES_cblock key_block;
     DES_key_schedule schedule;
 
-    // Enmascarar los 56 bits efectivos
     mask_56_bits(&key);
-
-    // Convertir el número de clave en 8 bytes
     memcpy(key_block, &key, 8);
-
-    // Usar DES_set_key_unchecked para evitar modificar la clave
     DES_set_key_unchecked(&key_block, &schedule);
-
-    // Cifrar en modo CBC
     DES_cbc_encrypt(input, output, input_len, &schedule, (DES_cblock *)iv, DES_ENCRYPT);
 }
 
@@ -60,36 +47,21 @@ int decrypt_with_key(unsigned long long key, const unsigned char *iv, unsigned c
     DES_cblock key_block;
     DES_key_schedule schedule;
 
-    // Enmascarar los 56 bits efectivos
     mask_56_bits(&key);
-
-    // Convertir el número de clave en 8 bytes
     memcpy(key_block, &key, 8);
-
-    // Usar DES_set_key_unchecked para evitar modificar la clave
     DES_set_key_unchecked(&key_block, &schedule);
-
-    // Desencriptar en modo CBC
     DES_cbc_encrypt(encrypted_text, decrypted_output, *text_len, &schedule, (DES_cblock *)iv, DES_DECRYPT);
 
-    // Eliminar padding PKCS5 después del descifrado
     if (!remove_padding(decrypted_output, text_len)) {
-        return 0;  // Error al eliminar padding
+        return 0;
     }
 
-    // Comprobar si el texto descifrado contiene la palabra clave
     if (strstr((char *)decrypted_output, keyword) != NULL) {
-        return 1;  // Clave encontrada
+        return 1;
     }
 
-    return 0;  // Clave incorrecta
+    return 0;
 }
-
-// Función para imprimir la clave en formato hexadecimal
-void print_key_hex(unsigned long long key) {
-    printf("Clave actual en hexadecimal: %016llX\n", key);  // Imprimir la clave en hexadecimal (16 caracteres, relleno con ceros si es necesario)
-}
-
 
 int main(int argc, char *argv[]) {
     MPI_Init(&argc, &argv);
@@ -123,15 +95,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Leer el texto del archivo
     char plaintext[128];
     fgets(plaintext, sizeof(plaintext), file);
     fclose(file);
 
-    // Añadir padding al texto leído
     add_padding((unsigned char *)plaintext, strlen(plaintext), padded_plaintext, &padded_len);
 
-    // Cifrar el texto original en memoria usando la clave inicial proporcionada
     unsigned long long key_start = strtoull(argv[2], NULL, 10);
     encrypt_with_key(key_start, iv, encrypted_text, padded_plaintext, padded_len);
 
@@ -141,32 +110,39 @@ int main(int argc, char *argv[]) {
         fclose(encrypted_file);
     }
 
-    // Iniciar búsqueda aleatoria con fuerza bruta
-    unsigned long long int max_key = 0xFFFFFFFFFFFFFF;  // Máximo de 56 bits
+    unsigned long long int max_key = 0xFFFFFFFFFFFFFF;
+    unsigned long long int range_per_process = max_key / size;
+    unsigned long long int start = rank * range_per_process;
+    unsigned long long int end = (rank + 1) * range_per_process - 1;
     unsigned long long int found_key = 0;
     int found = 0;
-    srand(time(NULL) + rank);  // Semilla del generador de números aleatorios para cada proceso
 
     clock_t start_time = clock();
 
-    while (!found) {
-        unsigned long long int random_key = ((unsigned long long)rand() << 32) | rand();  // Generar clave aleatoria
+    for (unsigned long long int i = start; i <= end && !found; i++) {
         decrypted_len = padded_len;
 
-        if (decrypt_with_key(random_key, iv, encrypted_text, decrypted_text, &decrypted_len, argv[3])) {
-            found_key = random_key;
+        if (decrypt_with_key(i, iv, encrypted_text, decrypted_text, &decrypted_len, argv[3])) {
+            found_key = i;
             found = 1;
             printf("Proceso %d: ¡Clave encontrada!: %016llX\n", rank, found_key);
             printf("Texto descifrado: %s\n", decrypted_text);
         }
 
-        // Verificar si algún proceso encontró la clave
-        MPI_Allreduce(&found, &found, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+        int temp_found = found;
+        MPI_Allreduce(&temp_found, &found, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
     }
 
     clock_t end_time = clock();
     double time_taken = ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
-    printf("Proceso %d: Tiempo de ejecución: %.6f segundos\n", rank, time_taken);
+
+    if (rank == 0) {
+        if (found) {
+            printf("Clave encontrada en algún proceso. Tiempo total: %.6f segundos\n", time_taken);
+        } else {
+            printf("Clave no encontrada en el rango dado. Tiempo total: %.6f segundos\n", time_taken);
+        }
+    }
 
     MPI_Finalize();
     return 0;
