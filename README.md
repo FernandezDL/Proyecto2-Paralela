@@ -1,4 +1,5 @@
-# Proyecto: Cifrado y Descifrado de Texto usando MPI y Fuerza Bruta 🔒
+# Proyecto
+# Cifrado y Descifrado de Texto usando MPI y Fuerza Bruta 🔒
 
 ## Descripción General
 Este proyecto consiste en implementar un programa en C/C++ para la búsqueda de una llave privada con la que fue cifrado un texto plano, utilizando el método de fuerza bruta. El programa se ejecuta en un entorno de memoria distribuida, utilizando **MPI (Message Passing Interface)** para la paralelización de la búsqueda de la clave. Se proporciona tanto una versión secuencial como una versión paralela del algoritmo.
