@@ -110,25 +110,44 @@ int main(int argc, char *argv[]) {
     unsigned long long found_key = 0;
     char found_decrypted_text[128] = {0};
 
-    // Fuerza bruta para encontrar la clave
+    // Fuerza bruta para encontrar la clave alternando entre los extremos
     clock_t start_time = clock();
-    for (unsigned long long i = start; i <= end && !found; i++) {
+    for (unsigned long long left = start, right = end; left <= right && !found; left++, right--) {
+        // Intentar con la clave en el extremo izquierdo (left)
         decrypted_len = padded_len;
-        if (decrypt_with_key(i, iv, encrypted_text, decrypted_text, &decrypted_len, keyword)) {
+        if (decrypt_with_key(left, iv, encrypted_text, decrypted_text, &decrypted_len, keyword)) {
             found = 1;
-            found_key = i;
-            // Copiar el texto descifrado para que sea enviado al proceso 0
+            found_key = left;
             strncpy(found_decrypted_text, (char *)decrypted_text, decrypted_len);
             found_decrypted_text[decrypted_len] = '\0';
 
-            // Notificar a otros procesos que se encontró la clave
             MPI_Bcast(&found, 1, MPI_INT, rank, MPI_COMM_WORLD);
             MPI_Bcast(&found_key, 1, MPI_UNSIGNED_LONG_LONG, rank, MPI_COMM_WORLD);
             MPI_Bcast(found_decrypted_text, 128, MPI_CHAR, rank, MPI_COMM_WORLD);
             break;
         }
-        // Revisar periódicamente si otro proceso ya encontró la clave
-        if (i % 10000 == 0) {
+
+        // Revisar si ya se encontró la clave
+        if (found) break;
+
+        // Intentar con la clave en el extremo derecho (right), si es diferente de left
+        if (right != left) {
+            decrypted_len = padded_len;
+            if (decrypt_with_key(right, iv, encrypted_text, decrypted_text, &decrypted_len, keyword)) {
+                found = 1;
+                found_key = right;
+                strncpy(found_decrypted_text, (char *)decrypted_text, decrypted_len);
+                found_decrypted_text[decrypted_len] = '\0';
+
+                MPI_Bcast(&found, 1, MPI_INT, rank, MPI_COMM_WORLD);
+                MPI_Bcast(&found_key, 1, MPI_UNSIGNED_LONG_LONG, rank, MPI_COMM_WORLD);
+                MPI_Bcast(found_decrypted_text, 128, MPI_CHAR, rank, MPI_COMM_WORLD);
+                break;
+            }
+        }
+
+        // Revisar periódicamente si algún otro proceso ya encontró la clave
+        if ((left - start) % 10000 == 0 || (end - right) % 10000 == 0) {
             MPI_Bcast(&found, 1, MPI_INT, 0, MPI_COMM_WORLD);
         }
     }
